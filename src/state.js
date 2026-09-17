@@ -167,6 +167,28 @@ export class State {
     row.cancel();
     return true;
   }
+  async persistRows() {
+    const operation = this.updated.catch(() => {}).then(async () => {
+      await atomic(path.join(this.directory, 'requests.json'), JSON.stringify(this.rows));
+      this.persistError = false;
+    });
+    this.updated = operation.catch(() => { this.persistError = true; });
+    await operation;
+  }
+  async deleteRequest(id) {
+    if (this.live.has(id)) return 'active';
+    const index = this.rows.findIndex(row => row.request_id === id);
+    if (index === -1) return 'missing';
+    this.rows.splice(index, 1);
+    await this.persistRows();
+    return 'deleted';
+  }
+  async clearHistory() {
+    const deleted = this.rows.length;
+    this.rows = [];
+    await this.persistRows();
+    return deleted;
+  }
   allRows() {
     return [...this.live.values()].map(({ cancel, ...rest }) => ({ ...rest, elapsed_ms: Date.now() - rest.started_at }))
       .concat(this.rows.filter(row => row.started_at >= Date.now() - logWindowMs));

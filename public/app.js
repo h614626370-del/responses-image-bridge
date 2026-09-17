@@ -123,7 +123,17 @@ function showDetail(row) {
   $('request-format').textContent = hasFormat ? JSON.stringify(row.request_format, null, 2) : '';
   $('usage-result').hidden = true;
   $('lookup-usage').disabled = !row.upstream_request_id;
+  $('delete-detail').hidden = ['queued', 'running'].includes(row.outcome);
   $('detail').showModal();
+}
+
+async function deleteRequest(row) {
+  if (!confirm(`删除请求记录 ${row.request_id.slice(0, 12)}？此操作无法撤销。`)) return;
+  await api(`/requests/${row.request_id}`, { method: 'DELETE' });
+  page = 1;
+  if ($('detail').open) $('detail').close();
+  notice('请求记录已删除。');
+  await refresh();
 }
 function renderRequests(data) {
   pages = data.pages;
@@ -157,6 +167,10 @@ function renderRequests(data) {
         await refresh();
       });
       actions.append(document.createTextNode(' '), cancel);
+    } else {
+      const remove = element('button', '删除', 'danger');
+      remove.onclick = () => guarded(remove, () => deleteRequest(row));
+      actions.append(document.createTextNode(' '), remove);
     }
     tr.append(actions);
     $('requests-body').append(tr);
@@ -286,6 +300,13 @@ $('export').onclick = () => guarded($('export'), async () => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
+$('clear-records').onclick = () => guarded($('clear-records'), async () => {
+  if (!confirm('清空所有已结束的请求记录？正在执行和排队的请求不会被删除。')) return;
+  const result = await api('/requests', { method: 'DELETE' });
+  page = 1;
+  notice(`已删除 ${result.deleted} 条请求记录。`);
+  await refresh();
+});
 $('status-filter').onchange = () => { page = 1; refresh().catch(e => notice(e.message, true)); };
 $('route-filter').onchange = () => { page = 1; refresh().catch(e => notice(e.message, true)); };
 let searchTimer;
@@ -343,6 +364,7 @@ async function changeAccountPage(delta) {
 $('accounts-previous').onclick = () => changeAccountPage(-1);
 $('accounts-next').onclick = () => changeAccountPage(1);
 $('close-detail').onclick = () => $('detail').close();
+$('delete-detail').onclick = () => guarded($('delete-detail'), () => deleteRequest(selected));
 $('lookup-usage').onclick = () => guarded($('lookup-usage'), async () => {
   const data = await api(`/sub2api/usage?${new URLSearchParams({ request_id: selected.upstream_request_id })}`);
   $('usage-result').hidden = false;
@@ -350,6 +372,7 @@ $('lookup-usage').onclick = () => guarded($('lookup-usage'), async () => {
 });
 for (const [id, icon, label, only] of [
   ['refresh', 'refresh-cw', '刷新', true], ['export', 'download', '导出记录', false],
+  ['clear-records', 'trash-2', '清空记录', false], ['delete-detail', 'trash-2', '删除记录', false],
   ['logout', 'log-out', '退出登录', false], ['close-detail', 'x', '关闭详情', true],
   ['load-accounts', 'search', '查询账号', false],
 ]) iconButton($(id), icon, label, only);

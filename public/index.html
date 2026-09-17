@@ -40,7 +40,7 @@
           <div><span>成功率</span><strong id="metric-rate">—</strong></div>
           <div><span>成功请求中位耗时</span><strong id="metric-latency">—</strong></div>
         </div>
-        <div class="section-heading"><h2>最近 12 小时请求日志</h2><div class="actions"><button id="pause">暂停接入</button><button id="export">导出记录</button><button id="refresh">刷新</button></div></div>
+        <div class="section-heading"><h2>最近 12 小时请求日志</h2><div class="actions"><button id="pause">暂停接入</button><button id="export">导出记录</button><button id="clear-records" class="danger">清空记录</button><button id="refresh">刷新</button></div></div>
         <div class="filters"><label>状态<select id="status-filter"><option value="">全部</option><option value="running">执行中</option><option value="queued">排队中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="incomplete">未完成</option><option value="canceled">已取消</option><option value="client_disconnected">客户端断开</option></select></label><label>路径<select id="route-filter"><option value="">全部</option><option value="images-edits">图生图直连</option><option value="responses">Responses</option></select></label><label class="grow">查找请求<input id="request-search" type="search" placeholder="请求 ID / 错误码"></label><label class="inline"><input type="checkbox" id="auto-refresh" checked>自动刷新</label></div>
         <div class="table-wrap"><table><thead><tr><th>请求 / 时间</th><th>路径 / 模型</th><th>状态</th><th>耗时 / 排队</th><th>图片</th><th>操作</th></tr></thead><tbody id="requests-body"></tbody></table></div>
         <div class="pagination"><span id="request-count" class="muted"></span><div class="actions"><button id="previous">上一页</button><span id="page-number"></span><button id="next">下一页</button></div></div>
@@ -75,6 +75,6 @@
       </section>
     </main>
   </div>
-  <dialog id="detail"><div class="section-heading"><h2>请求详情</h2><button id="close-detail" aria-label="关闭详情">关闭</button></div><dl id="detail-fields"></dl><h2 id="request-format-title" hidden>脱敏请求格式</h2><pre id="request-format" hidden></pre><div class="actions"><button id="lookup-usage">查询上游用量</button></div><pre id="usage-result" hidden></pre></dialog>
+  <dialog id="detail"><div class="section-heading"><h2>请求详情</h2><button id="close-detail" aria-label="关闭详情">关闭</button></div><dl id="detail-fields"></dl><h2 id="request-format-title" hidden>脱敏请求格式</h2><pre id="request-format" hidden></pre><div class="actions"><button id="lookup-usage">查询上游用量</button><button id="delete-detail" class="danger">删除记录</button></div><pre id="usage-result" hidden></pre></dialog>
 </body>
 </html>

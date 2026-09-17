@@ -169,6 +169,48 @@ test('validation failures retain a bounded sanitized request format', async t =>
   assert.doesNotMatch(text, /private-client-key|private-client-version|private failed prompt|private-body-token|private-mode/);
 });
 
+test('completed request logs can be deleted individually or cleared while live requests are protected', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, async () => {
+    await gate;
+    return structuredClone(result);
+  });
+  t.after(() => release());
+  await f.login();
+
+  const invalid = await fetch(`${f.url}/v1/responses`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer test-key', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'gpt-5.5' }),
+  });
+  assert.equal(invalid.status, 400);
+  const invalidID = invalid.headers.get('x-bridge-request-id');
+  await f.state.updated;
+  assert.equal((await f.api(`/requests/${invalidID}`, 'DELETE')).status, 200);
+  assert.equal((await f.api(`/requests/${invalidID}`, 'DELETE')).status, 404);
+
+  const live = await f.post();
+  const liveID = live.headers.get('x-bridge-request-id');
+  assert.equal((await f.api(`/requests/${liveID}`, 'DELETE')).status, 409);
+  release();
+  await live.text();
+  await f.state.updated;
+
+  const secondInvalid = await fetch(`${f.url}/v1/responses`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer test-key', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'gpt-5.5' }),
+  });
+  assert.equal(secondInvalid.status, 400);
+  await f.state.updated;
+  const cleared = await f.api('/requests', 'DELETE');
+  assert.equal(cleared.status, 200);
+  assert.equal((await cleared.json()).deleted, 2);
+  assert.equal((await (await f.api('/requests')).json()).total, 0);
+  assert.equal(JSON.parse(await readFile(path.join(f.directory, 'requests.json'), 'utf8')).length, 0);
+});
+
 test('runtime model changes affect only new requests and history supports ID search', async t => {
   const seen = [];
   let complete;

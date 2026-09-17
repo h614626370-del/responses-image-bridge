@@ -31,7 +31,7 @@ export function createManagement(state) {
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
-      const icon = /^\/admin\/icons\/(activity|download|log-out|pause|play|refresh-cw|save|search|server|settings|x)\.svg$/.exec(p);
+      const icon = /^\/admin\/icons\/(activity|download|log-out|pause|play|refresh-cw|save|search|server|settings|trash-2|x)\.svg$/.exec(p);
       if (req.method === 'GET' && (icon || ['/', '/admin', '/admin/', '/admin/app.js', '/admin/style.css', '/admin/icon.svg'].includes(p))) {
         const name = icon ? `icons/${icon[1]}.svg` : p.endsWith('app.js') ? 'app.js' : p.endsWith('style.css') ? 'style.css' : p.endsWith('icon.svg') ? 'icon.svg' : 'index.html';
         const file = await readFile(fileURLToPath(new URL(name, publicDir)));
@@ -88,6 +88,14 @@ export function createManagement(state) {
         if (search) rows = rows.filter(row => [row.request_id, row.upstream_request_id, row.upstream_response_id, row.error_code].some(value => String(value || '').toLowerCase().includes(search)));
         const page = Math.max(1, Math.min(100, Math.floor(Number(url.searchParams.get('page'))) || 1));
         json(res, 200, { items: rows.slice((page - 1) * 30, page * 30), total: rows.length, page, pages: Math.max(1, Math.ceil(rows.length / 30)) });
+      } else if (p === '/admin/api/requests' && req.method === 'DELETE') {
+        json(res, 200, { ok: true, deleted: await state.clearHistory() });
+      } else if (/^\/admin\/api\/requests\/[a-f0-9-]+$/.test(p) && req.method === 'DELETE') {
+        const result = await state.deleteRequest(p.split('/')[4]);
+        json(res, result === 'deleted' ? 200 : result === 'active' ? 409 : 404, {
+          ok: result === 'deleted',
+          error: result === 'active' ? '请求仍在进行，请先取消' : result === 'missing' ? '记录不存在' : undefined,
+        });
       } else if (p === '/admin/api/export' && req.method === 'GET') {
         res.setHeader('Content-Disposition', 'attachment; filename="bridge-requests.json"');
         json(res, 200, state.allRows());
