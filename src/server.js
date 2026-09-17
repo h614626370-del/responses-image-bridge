@@ -4,6 +4,7 @@ import { Queue } from './queue.js';
 import { BridgeError, callUpstream, callDirectEdit } from './upstream.js';
 import { emitResponse, eventWriter, writeFrame } from './events.js';
 import { imageInputPresent, parseDirectEdit, wrapDirectEdit } from './direct-edits.js';
+import { describeRequest } from './request-format.js';
 
 function sendJSON(res, status, data) {
   if (res.destroyed) return;
@@ -133,6 +134,8 @@ export function createBridge(baseConfig, { upstream = callUpstream, editUpstream
     let emit;
     let replayStarted = false;
     let clientKey = '';
+    let requestFormat = req.method === 'POST' && ['/v1/responses', '/responses'].includes(requestPath) ?
+      describeRequest(req, requestPath) : undefined;
     const controller = new AbortController();
     const { signal } = controller;
     const abortOnClose = () => { if (!finished) controller.abort(new Error('Client disconnected')); };
@@ -174,6 +177,7 @@ export function createBridge(baseConfig, { upstream = callUpstream, editUpstream
         throw new BridgeError(415, 'unsupported_encoding', 'Compressed request bodies are not supported');
       }
       const body = await readJSON(req, config.maxBodyBytes);
+      requestFormat = describeRequest(req, requestPath, body);
       requestedModel = typeof body?.model === 'string' ? body.model.slice(0, 100) : undefined;
       route = config.directEdits && imageInputPresent(body) ? 'images-edits' : 'responses';
       if (route === 'images-edits') {
@@ -196,7 +200,7 @@ export function createBridge(baseConfig, { upstream = callUpstream, editUpstream
       state?.track(bridgeID, {
         started_at: begin, outcome: 'queued', phase: 'queued', stream: streaming,
         requested_model: requestedModel, control_model: config.controlModel, route,
-        image_model: imageModel, source_images: sourceImages,
+        image_model: imageModel, source_images: sourceImages, request_format: requestFormat,
       }, () => controller.abort(new BridgeError(499, 'operator_cancelled', 'Request canceled by administrator')));
       if (streaming) {
         res.writeHead(200, {
@@ -301,6 +305,7 @@ export function createBridge(baseConfig, { upstream = callUpstream, editUpstream
         upstream_host: new URL(config.upstreamURL).host, heartbeat_count: heartbeatCount,
         upstream_response_id: upstreamResponseID, ...upstreamMeta,
         images: imageCount, queue_ms: queueMs, started_at: begin, elapsed_ms: Date.now() - begin,
+        request_format: requestFormat,
       };
       if (!['health', 'models'].includes(outcome)) logger(entry);
       if (state && isResponses) state.finish(entry);

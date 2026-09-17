@@ -134,7 +134,39 @@ test('pause prevents work, cancel ends SSE and persisted metadata excludes promp
   assert.equal((await f.api(`/requests/${id}/cancel`, 'POST', {})).status, 404);
   const disk = await readFile(path.join(f.directory, 'requests.json'), 'utf8');
   assert.doesNotMatch(disk, /private-prompt|private-image-data|private-client-key/);
+  assert.match(disk, /request_format/);
+  assert.match(disk, /redacted text chars=14/);
+  assert.match(disk, /image_generation/);
   assert.equal((await (await f.api('/export')).json()).length, 2);
+});
+
+test('validation failures retain a bounded sanitized request format', async t => {
+  const f = await fixture(t);
+  await f.login();
+  const response = await fetch(`${f.url}/v1/responses`, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer private-client-key',
+      'Content-Type': 'application/json',
+      'X-Client-Version': 'private-client-version',
+    },
+    body: JSON.stringify({
+      model: 'gpt-5.5', stream: true, input: 'private failed prompt',
+      extension: { token: 'private-body-token', mode: 'private-mode' },
+    }),
+  });
+  assert.equal(response.status, 400);
+  const id = response.headers.get('x-bridge-request-id');
+  await f.state.updated;
+  const data = await (await f.api(`/requests?search=${id}`)).json();
+  assert.equal(data.total, 1);
+  assert.equal(data.items[0].error_code, 'image_tool_required');
+  assert.equal(data.items[0].request_format.body.model, 'gpt-5.5');
+  assert.equal(data.items[0].request_format.body.input, '[redacted text chars=21]');
+  assert.equal(data.items[0].request_format.body.extension.token, '[redacted secret]');
+  const text = JSON.stringify(data.items[0].request_format);
+  assert.match(text, /authorization/);
+  assert.doesNotMatch(text, /private-client-key|private-client-version|private failed prompt|private-body-token|private-mode/);
 });
 
 test('runtime model changes affect only new requests and history supports ID search', async t => {

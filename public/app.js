@@ -117,6 +117,10 @@ function showDetail(row) {
     $('detail-fields').append(element('dt', '处理过程'), element('dd', row.timeline.map(item =>
       `${time(item.at)} ${phases[item.phase] || item.phase}`).join('\n'), 'timeline'));
   }
+  const hasFormat = row.request_format && typeof row.request_format === 'object';
+  $('request-format-title').hidden = !hasFormat;
+  $('request-format').hidden = !hasFormat;
+  $('request-format').textContent = hasFormat ? JSON.stringify(row.request_format, null, 2) : '';
   $('usage-result').hidden = true;
   $('lookup-usage').disabled = !row.upstream_request_id;
   $('detail').showModal();
