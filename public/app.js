@@ -117,10 +117,20 @@ function showDetail(row) {
     $('detail-fields').append(element('dt', '处理过程'), element('dd', row.timeline.map(item =>
       `${time(item.at)} ${phases[item.phase] || item.phase}`).join('\n'), 'timeline'));
   }
-  const hasFormat = row.request_format && typeof row.request_format === 'object';
-  $('request-format-title').hidden = !hasFormat;
-  $('request-format').hidden = !hasFormat;
-  $('request-format').textContent = hasFormat ? JSON.stringify(row.request_format, null, 2) : '';
+  $('raw-request-title').hidden = false;
+  $('raw-request').hidden = false;
+  $('raw-request').textContent = '正在读取原始请求…';
+  api(`/requests/${row.request_id}/raw`).then(raw => {
+    if (selected?.request_id !== row.request_id) return;
+    const lines = [`${raw.method} ${raw.url} HTTP/${raw.http_version}`];
+    for (let i = 0; i < raw.raw_headers.length; i += 2) {
+      lines.push(`${raw.raw_headers[i]}: ${raw.raw_headers[i + 1]}`);
+    }
+    lines.push('', raw.body);
+    $('raw-request').textContent = lines.join('\n');
+  }).catch(error => {
+    if (selected?.request_id === row.request_id) $('raw-request').textContent = error.message;
+  });
   $('usage-result').hidden = true;
   $('lookup-usage').disabled = !row.upstream_request_id;
   $('delete-detail').hidden = ['queued', 'running'].includes(row.outcome);
@@ -211,6 +221,7 @@ function fillSettings() {
   form.elements.heartbeatSeconds.value = s.heartbeatMs / 1000;
   form.elements.doneSentinel.checked = s.doneSentinel;
   form.elements.directEdits.checked = s.directEdits;
+  form.elements.rawRequestLogging.checked = s.rawRequestLogging;
   for (const [name, statusID, clearName] of [
     ['sub2apiKey', 'admin-key-status', 'clearSub2apiKey'],
   ]) {
@@ -330,6 +341,9 @@ $('settings-form').onsubmit = async event => {
     patch.heartbeatMs = Number(values.get('heartbeatSeconds')) * 1000;
     patch.doneSentinel = values.has('doneSentinel');
     patch.directEdits = values.has('directEdits');
+    patch.rawRequestLogging = values.has('rawRequestLogging');
+    if (patch.rawRequestLogging && !latest.settings.rawRequestLogging &&
+        !confirm('完整原始请求会保存客户端 Key、提示词、图片地址和 Base64 图片，确认开启？')) return;
     for (const [name, clearName] of [['sub2apiKey', 'clearSub2apiKey']]) {
       if (values.has(clearName)) patch[name] = '';
       else if (String(values.get(name)).trim()) patch[name] = String(values.get(name)).trim();

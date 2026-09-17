@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { loadConfig } from '../src/config.js';
 import { State, logWindowMs } from '../src/state.js';
 import { createBridge } from '../src/server.js';
+import { downloadRemoteImage } from '../src/direct-edits.js';
 
 const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
 const dataURL = `data:image/png;base64,${image}`;
@@ -36,7 +37,7 @@ function events(raw) {
     return data && data !== '[DONE]' ? [JSON.parse(data)] : [];
   });
 }
-async function fixture(t, upstreamHandler, overrides = {}) {
+async function fixture(t, upstreamHandler, overrides = {}, bridgeOverrides = {}) {
   const requests = [];
   const upstream = http.createServer(async (req, res) => {
     const chunks = [];
@@ -50,7 +51,7 @@ async function fixture(t, upstreamHandler, overrides = {}) {
   const config = loadConfig({ UPSTREAM_BASE_URL: upstreamURL, HEARTBEAT_MS: '20',
     REQUEST_TIMEOUT_MS: '3000', ...overrides });
   const state = await State.open(config, directory);
-  const bridge = createBridge(config, { state, logger() {} });
+  const bridge = createBridge(config, { state, logger() {}, ...bridgeOverrides });
   const url = await listen(bridge);
   t.after(async () => {
     await close(bridge);
@@ -161,11 +162,41 @@ test('non-stream edits upload multiple sources and a mask, then return one JSON 
   assert.equal(f.state.allRows()[0].source_images, 2);
 });
 
+test('HTTPS image URLs are downloaded, validated and uploaded as multipart files', async t => {
+  const sourceURL = 'https://cdn.example.com/product.png?signature=private';
+  const loaded = [];
+  const f = await fixture(t, async (req, res, raw) => {
+    const form = await new Request('http://local.test', { method: 'POST', headers: {
+      'Content-Type': req.headers['content-type'],
+    }, body: raw }).formData();
+    assert.deepEqual(Buffer.from(await form.get('image').arrayBuffer()), Buffer.from(image, 'base64'));
+    res.end(JSON.stringify({ data: [{ b64_json: image }] }));
+  }, {}, { imageLoader: async (url, signal) => {
+    loaded.push({ url, signal });
+    return { bytes: Buffer.from(image, 'base64'), mime: 'image/png' };
+  } });
+  const body = structuredClone(editBody);
+  body.input[0].content[1].image_url = sourceURL;
+  const result = events(await (await f.post(body)).text());
+  assert.equal(result.at(-1).type, 'response.completed');
+  assert.equal(loaded.length, 1);
+  assert.equal(loaded[0].url, sourceURL);
+  assert.equal(loaded[0].signal.aborted, false);
+  assert.deepEqual(f.state.allRows()[0].timeline.map(step => step.phase),
+    ['queued', 'source_download', 'upstream', 'upstream_headers', 'delivery', 'finished']);
+});
+
+test('remote image downloader rejects loopback and private destinations', async () => {
+  for (const url of ['https://127.0.0.1/image.png', 'https://10.0.0.1/image.png', 'http://example.com/image.png']) {
+    await assert.rejects(downloadRemoteImage(url), error =>
+      ['image_url_blocked', 'direct_edit_unsupported'].includes(error.code));
+  }
+});
+
 test('invalid or unsupported image inputs fail before spending an upstream request', async t => {
   const f = await fixture(t, async () => { throw new Error('Should not call upstream'); });
   for (const input of [
     { type: 'input_image', file_id: 'file_123' },
-    { type: 'input_image', image_url: 'https://example.org/image.png' },
     { type: 'input_image', image_url: 'data:image/png;base64,SGVsbG8=' },
   ]) {
     const body = structuredClone(editBody);
@@ -183,7 +214,7 @@ test('invalid or unsupported image inputs fail before spending an upstream reque
   wrongCount.tools[0].n = 2;
   assert.equal((await f.post(wrongCount)).status, 400);
   assert.equal(f.requests.length, 0);
-  assert.equal(f.state.allRows().length, 6);
+  assert.equal(f.state.allRows().length, 5);
   assert.ok(f.state.allRows().every(row => row.route === 'images-edits' && row.error_code === 'direct_edit_unsupported'));
   assert.equal(f.state.allRows()[0].image_model, 'gpt-image-2');
   assert.equal(f.state.allRows()[0].source_images, 1);

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Queue } from './queue.js';
 import { BridgeError, callUpstream, callDirectEdit } from './upstream.js';
 import { emitResponse, eventWriter, writeFrame } from './events.js';
-import { imageInputPresent, parseDirectEdit, wrapDirectEdit } from './direct-edits.js';
+import { imageInputPresent, materializeDirectEdit, parseDirectEdit, wrapDirectEdit } from './direct-edits.js';
 import { describeRequest } from './request-format.js';
 
 function sendJSON(res, status, data) {
@@ -22,7 +22,7 @@ function enableAPICORS(req, res) {
   res.setHeader('Access-Control-Max-Age', '86400');
 }
 
-export async function readJSON(req, maxBytes) {
+export async function readJSON(req, maxBytes, capture) {
   let length = 0;
   const chunks = [];
   // Do not destroy the request via an async iterator on validation failure:
@@ -47,7 +47,9 @@ export async function readJSON(req, maxBytes) {
     function aborted() { error(new Error('Client disconnected')); }
     req.on('data', data).once('end', end).once('error', error).once('aborted', aborted);
   });
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {
+  const raw = Buffer.concat(chunks);
+  if (capture) await capture(raw);
+  try { return JSON.parse(raw.toString('utf8')); } catch {
     throw new BridgeError(400, 'invalid_json', 'Request body must be valid JSON');
   }
 }
@@ -90,7 +92,7 @@ function validateResponse(response) {
 }
 
 export function createBridge(baseConfig, { upstream = callUpstream, editUpstream = callDirectEdit,
-  logger = entry => console.log(JSON.stringify(entry)), state, management } = {}) {
+  imageLoader, logger = entry => console.log(JSON.stringify(entry)), state, management } = {}) {
   const queue = new Queue(baseConfig.maxConcurrent ?? Infinity, baseConfig.maxQueue);
   if (state) state.onConfigChanged = () => {
     queue.limit = baseConfig.maxConcurrent ?? Infinity;
@@ -176,7 +178,13 @@ export function createBridge(baseConfig, { upstream = callUpstream, editUpstream
       if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') {
         throw new BridgeError(415, 'unsupported_encoding', 'Compressed request bodies are not supported');
       }
-      const body = await readJSON(req, config.maxBodyBytes);
+      const body = await readJSON(req, config.maxBodyBytes, config.rawRequestLogging && state ? async raw => {
+        await state.captureRawRequest(bridgeID, {
+          captured_at: Date.now(), method: req.method, url: req.url,
+          http_version: req.httpVersion, raw_headers: req.rawHeaders,
+          body: raw.toString('utf8'), body_bytes: raw.length,
+        });
+      } : undefined);
       requestFormat = describeRequest(req, requestPath, body);
       requestedModel = typeof body?.model === 'string' ? body.model.slice(0, 100) : undefined;
       route = config.directEdits && imageInputPresent(body) ? 'images-edits' : 'responses';
@@ -187,7 +195,7 @@ export function createBridge(baseConfig, { upstream = callUpstream, editUpstream
           item.content.filter(part => part?.type === 'input_image').length : Number(item?.type === 'input_image')), 0);
       }
       const rewritten = rewriteBody(body, config);
-      const edit = route === 'images-edits' ? parseDirectEdit(body) : null;
+      let edit = route === 'images-edits' ? parseDirectEdit(body) : null;
       imageModel = edit?.model;
       sourceImages = edit?.images.length;
       if (state?.paused) throw new BridgeError(503, 'bridge_paused', 'Bridge is paused; retry later');
@@ -223,7 +231,11 @@ export function createBridge(baseConfig, { upstream = callUpstream, editUpstream
       release = await queue.acquire(signal);
       signal.throwIfAborted();
       queueMs = Date.now() - begin;
-      state?.track(bridgeID, { outcome: 'running', phase: 'upstream', queue_ms: queueMs });
+      state?.track(bridgeID, { outcome: 'running', phase: edit?.remoteCount ? 'source_download' : 'upstream', queue_ms: queueMs });
+      if (edit?.remoteCount) {
+        edit = await materializeDirectEdit(edit, signal, imageLoader);
+        state?.track(bridgeID, { phase: 'upstream' });
+      }
       // Forward only explicitly allowed non-secret context headers.
       const forwardHeaders = {};
       for (const name of ['session-id', 'session_id', 'conversation_id', 'x-session-id']) {
@@ -256,8 +268,9 @@ export function createBridge(baseConfig, { upstream = callUpstream, editUpstream
       clearInterval(heartbeat);
       const reason = signal.aborted ? signal.reason : err;
       errorCode = reason instanceof BridgeError ? reason.code : 'upstream_connection_error';
-      if (reason instanceof BridgeError && ['direct_edit_unsupported', 'image_missing',
-        'upstream_http_error', 'bridge_timeout', 'request_too_large'].includes(reason.code)) {
+      if (reason instanceof BridgeError && ['direct_edit_unsupported', 'image_download_failed',
+        'image_download_timeout', 'image_url_blocked', 'image_too_large', 'image_missing', 'upstream_http_error',
+        'bridge_timeout', 'request_too_large'].includes(reason.code)) {
         errorDetail = reason.message.slice(0, 240);
       }
       if (errorCode === 'operator_cancelled') outcome = 'canceled';

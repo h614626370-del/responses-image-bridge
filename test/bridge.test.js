@@ -81,6 +81,9 @@ test('configuration normalizes base URLs and ignores obsolete fixed credentials'
     assert.equal(loadConfig({ UPSTREAM_BASE_URL: base }).upstreamURL, 'https://example.org/v1/responses');
   }
   assert.equal(loadConfig({ UPSTREAM_API_KEY: 'secret' }).upstreamKey, undefined);
+  assert.equal(loadConfig({}).rawRequestLogging, false);
+  assert.equal(loadConfig({ RAW_REQUEST_LOGGING: 'true' }).rawRequestLogging, true);
+  assert.throws(() => loadConfig({ RAW_REQUEST_LOGGING: 'yes' }), /RAW_REQUEST_LOGGING/);
   assert.equal(loadConfig({ HOST: '0.0.0.0' }).host, '0.0.0.0');
   assert.throws(() => loadConfig({ MAX_CONCURRENT: '0' }), /MAX_CONCURRENT/);
   assert.equal(loadConfig({ UPSTREAM_PROXY: 'http://localhost:7897' }).proxy, undefined);

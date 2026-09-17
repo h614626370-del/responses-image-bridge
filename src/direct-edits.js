@@ -1,28 +1,141 @@
 import { randomUUID } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
+import https from 'node:https';
+import { BlockList } from 'node:net';
 import { BridgeError } from './upstream.js';
 
 const maxImageBytes = 20 * 1024 * 1024;
+const maxRedirects = 3;
+const downloadTimeoutMs = 30000;
 const allowedOptions = ['size', 'quality', 'background', 'output_format', 'output_compression',
   'moderation', 'input_fidelity', 'style'];
+const blockedAddresses = new BlockList();
+for (const [address, prefix] of [
+  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
+  ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24],
+  ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24],
+  ['224.0.0.0', 4], ['240.0.0.0', 4],
+]) blockedAddresses.addSubnet(address, prefix, 'ipv4');
+for (const [address, prefix] of [
+  ['::', 96], ['::1', 128], ['64:ff9b::', 96], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10],
+  ['ff00::', 8], ['2001::', 23], ['2001:db8::', 32], ['2002::', 16],
+]) blockedAddresses.addSubnet(address, prefix, 'ipv6');
 
 function bad(message) {
   throw new BridgeError(400, 'direct_edit_unsupported', message);
 }
 
+function inspectImage(bytes, declaredMime) {
+  if (!bytes.length || bytes.length > maxImageBytes) bad('Each source image must be between 1 byte and 20 MiB');
+  const mime = bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) ? 'image/png' :
+    bytes[0] === 0xff && bytes[1] === 0xd8 ? 'image/jpeg' :
+      bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP' ? 'image/webp' : '';
+  if (!mime) bad('Source image must contain valid PNG, JPEG or WebP data');
+  if (declaredMime && mime !== declaredMime) bad('Source image contents do not match its declared type');
+  return { bytes, mime };
+}
+
 function decodeImage(part) {
   if (part.file_id) bad('Direct edits do not support file_id; provide an image data URL');
   const value = part.image_url;
-  if (typeof value !== 'string') bad('Direct edits require an image data URL');
+  if (typeof value !== 'string') bad('Direct edits require an image data URL or HTTPS URL');
   const match = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/i.exec(value);
-  if (!match || match[2].length % 4) bad('Direct edits support only base64 PNG, JPEG or WebP data URLs');
-  const bytes = Buffer.from(match[2], 'base64');
-  if (!bytes.length || bytes.length > maxImageBytes) bad('Each source image must be between 1 byte and 20 MiB');
-  const mime = match[1].toLowerCase();
-  const valid = mime === 'image/png' ? bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) :
-    mime === 'image/jpeg' ? bytes[0] === 0xff && bytes[1] === 0xd8 :
-      bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP';
-  if (!valid) bad('Source image contents do not match its declared type');
-  return { bytes, mime };
+  if (match) {
+    if (match[2].length % 4) bad('Invalid base64 image data');
+    return inspectImage(Buffer.from(match[2], 'base64'), match[1].toLowerCase());
+  }
+  let url;
+  try { url = new URL(value); } catch { bad('Direct edits support only base64 image data or HTTPS image URLs'); }
+  if (url.protocol !== 'https:' || url.username || url.password) {
+    bad('Remote source images must use an HTTPS URL without embedded credentials');
+  }
+  return { url: url.toString() };
+}
+
+async function publicAddress(hostname) {
+  let addresses;
+  try { addresses = await lookup(hostname, { all: true, verbatim: true }); }
+  catch { throw new BridgeError(400, 'image_download_failed', 'Could not resolve the source image host'); }
+  if (!addresses.length || addresses.some(({ address, family }) =>
+    family === 6 && address.toLowerCase().startsWith('::ffff:') ||
+    blockedAddresses.check(address, family === 6 ? 'ipv6' : 'ipv4'))) {
+    throw new BridgeError(400, 'image_url_blocked', 'Source image URL resolves to a private or reserved address');
+  }
+  return addresses[0];
+}
+
+export async function downloadRemoteImage(value, signal, redirects = 0) {
+  let url;
+  try { url = new URL(value); } catch { bad('Invalid source image URL'); }
+  if (url.protocol !== 'https:' || url.username || url.password) {
+    bad('Remote source images must use an HTTPS URL without embedded credentials');
+  }
+  if (redirects > maxRedirects) {
+    throw new BridgeError(400, 'image_download_failed', 'Source image redirected too many times');
+  }
+  const address = await publicAddress(url.hostname);
+  const timeoutSignal = AbortSignal.timeout(downloadTimeoutMs);
+  const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  return await new Promise((resolve, reject) => {
+    const request = https.get(url, {
+      agent: false,
+      signal: requestSignal,
+      headers: { Accept: 'image/png,image/jpeg,image/webp,*/*;q=0.1', 'Accept-Encoding': 'identity' },
+      lookup(_hostname, options, callback) {
+        if (options?.all) callback(null, [address]);
+        else callback(null, address.address, address.family);
+      },
+    }, response => {
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        response.resume();
+        let destination;
+        try { destination = new URL(response.headers.location, url).toString(); }
+        catch {
+          reject(new BridgeError(400, 'image_download_failed', 'Source image returned an invalid redirect'));
+          return;
+        }
+        resolve(downloadRemoteImage(destination, signal, redirects + 1));
+        return;
+      }
+      if (response.statusCode !== 200) {
+        response.resume();
+        reject(new BridgeError(400, 'image_download_failed', `Source image returned HTTP ${response.statusCode}`));
+        return;
+      }
+      if (response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity') {
+        response.resume();
+        reject(new BridgeError(400, 'image_download_failed', 'Compressed source images are not supported'));
+        return;
+      }
+      const declaredLength = Number(response.headers['content-length']);
+      if (Number.isFinite(declaredLength) && declaredLength > maxImageBytes) {
+        response.resume();
+        reject(new BridgeError(413, 'image_too_large', 'Source image exceeds 20 MiB'));
+        return;
+      }
+      let size = 0;
+      const chunks = [];
+      response.on('data', chunk => {
+        size += chunk.length;
+        if (size > maxImageBytes) {
+          const error = new BridgeError(413, 'image_too_large', 'Source image exceeds 20 MiB');
+          reject(error);
+          response.destroy(error);
+        } else chunks.push(chunk);
+      });
+      response.on('error', reject);
+      response.on('end', () => {
+        try { resolve(inspectImage(Buffer.concat(chunks))); } catch (error) { reject(error); }
+      });
+    });
+    request.on('error', error => {
+      if (signal?.aborted) reject(signal.reason);
+      else if (timeoutSignal.aborted) {
+        reject(new BridgeError(504, 'image_download_timeout', 'Timed out while downloading the source image'));
+      }
+      else reject(new BridgeError(400, 'image_download_failed', 'Could not download the source image'));
+    });
+  });
 }
 
 export function imageInputPresent(body) {
@@ -69,7 +182,19 @@ export function parseDirectEdit(body) {
     if (!tool.input_image_mask || typeof tool.input_image_mask !== 'object') bad('Invalid image mask');
     mask = decodeImage(tool.input_image_mask);
   }
-  return { model: tool.model, prompt, images, mask, options };
+  const remoteCount = images.filter(image => image.url).length + Number(Boolean(mask?.url));
+  return { model: tool.model, prompt, images, mask, options, remoteCount };
+}
+
+export async function materializeDirectEdit(spec, signal, loader = downloadRemoteImage) {
+  async function materialize(image) {
+    return image?.url ? loader(image.url, signal) : image;
+  }
+  return {
+    ...spec,
+    images: await Promise.all(spec.images.map(materialize)),
+    mask: spec.mask ? await materialize(spec.mask) : undefined,
+  };
 }
 
 export function wrapDirectEdit(result, spec, requestedModel) {

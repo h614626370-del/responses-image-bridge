@@ -57,6 +57,7 @@
             <label>心跳间隔（秒）<input name="heartbeatSeconds" type="number" min="0.1" step="0.1" max="60" required></label>
             <label class="inline"><input name="doneSentinel" type="checkbox">附加 [DONE] 结束标记</label>
             <label class="inline"><input name="directEdits" type="checkbox">图生图请求直连图片编辑接口</label>
+            <label class="inline"><input name="rawRequestLogging" type="checkbox">保存完整原始请求（包含密钥和图片）</label>
           </div>
           <div class="section-heading rule"><h2>sub2api 管理连接</h2><span class="badge">只读</span></div>
           <div class="form-grid">
@@ -75,6 +76,6 @@
       </section>
     </main>
   </div>
-  <dialog id="detail"><div class="section-heading"><h2>请求详情</h2><button id="close-detail" aria-label="关闭详情">关闭</button></div><dl id="detail-fields"></dl><h2 id="request-format-title" hidden>脱敏请求格式</h2><pre id="request-format" hidden></pre><div class="actions"><button id="lookup-usage">查询上游用量</button><button id="delete-detail" class="danger">删除记录</button></div><pre id="usage-result" hidden></pre></dialog>
+  <dialog id="detail"><div class="section-heading"><h2>请求详情</h2><button id="close-detail" aria-label="关闭详情">关闭</button></div><dl id="detail-fields"></dl><h2 id="raw-request-title" hidden>原始请求（包含敏感信息）</h2><pre id="raw-request" hidden></pre><div class="actions"><button id="lookup-usage">查询上游用量</button><button id="delete-detail" class="danger">删除记录</button></div><pre id="usage-result" hidden></pre></dialog>
 </body>
 </html>

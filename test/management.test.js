@@ -84,7 +84,7 @@ test('settings encrypt credentials, never return them, survive reopen and valida
   await f.login();
   const secrets = { sub2apiKey: 'private-admin-key' };
   const response = await f.api('/settings', 'PUT', { ...secrets, controlModel: 'gpt-5.5',
-    maxConcurrent: 7, directEdits: false });
+    maxConcurrent: 7, directEdits: false, rawRequestLogging: true });
   assert.equal(response.status, 200);
   const publicData = await response.text();
   const disk = await readFile(path.join(f.directory, 'settings.json'), 'utf8');
@@ -98,8 +98,9 @@ test('settings encrypt credentials, never return them, survive reopen and valida
   assert.equal(restored.config.sub2apiKey, secrets.sub2apiKey);
   assert.equal(restored.config.controlModel, 'gpt-5.5');
   assert.equal(restored.config.directEdits, false);
+  assert.equal(restored.config.rawRequestLogging, true);
   for (const patch of [{ maxConcurrent: 0 }, { bridgeKey: '' }, { proxy: 'http://127.0.0.1:7897' },
-    { doneSentinel: 'false' }, { directEdits: 'true' },
+    { doneSentinel: 'false' }, { directEdits: 'true' }, { rawRequestLogging: 'true' },
     { sub2apiKey: 'bad\nheader' }, { sub2apiBase: 'https://user:pass@host' }, { arbitrary: true }]) {
     assert.equal((await f.api('/settings', 'PUT', patch)).status, 400);
   }
@@ -167,6 +168,34 @@ test('validation failures retain a bounded sanitized request format', async t =>
   const text = JSON.stringify(data.items[0].request_format);
   assert.match(text, /authorization/);
   assert.doesNotMatch(text, /private-client-key|private-client-version|private failed prompt|private-body-token|private-mode/);
+});
+
+test('opt-in raw request logging stores the exact received headers and JSON body', async t => {
+  const f = await fixture(t);
+  f.config.rawRequestLogging = true;
+  await f.login();
+  const rawBody = '{ "model": "gpt-5.5", "input": "private raw prompt" }';
+  const response = await fetch(`${f.url}/v1/responses`, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer private-raw-key',
+      'Content-Type': 'application/json',
+      'X-Private-Client': 'private-header-value',
+    },
+    body: rawBody,
+  });
+  assert.equal(response.status, 400);
+  const id = response.headers.get('x-bridge-request-id');
+  await f.state.updated;
+  const rawResponse = await f.api(`/requests/${id}/raw`);
+  assert.equal(rawResponse.status, 200);
+  const raw = await rawResponse.json();
+  assert.equal(raw.body, rawBody);
+  assert.equal(raw.body_bytes, Buffer.byteLength(rawBody));
+  assert.ok(raw.raw_headers.includes('Bearer private-raw-key'));
+  assert.ok(raw.raw_headers.includes('private-header-value'));
+  assert.equal((await f.api(`/requests/${id}`, 'DELETE')).status, 200);
+  assert.equal((await f.api(`/requests/${id}/raw`)).status, 404);
 });
 
 test('completed request logs can be deleted individually or cleared while live requests are protected', async t => {

@@ -27,9 +27,13 @@ export function loadConfig(env = process.env) {
     maxBodyBytes: integer('MAX_BODY_BYTES', 32 * 1024 ** 2, 128, 256 * 1024 ** 2),
     maxResponseBytes: integer('MAX_RESPONSE_BYTES', 64 * 1024 ** 2, 128, 512 * 1024 ** 2),
     doneSentinel: env.SSE_DONE_SENTINEL === 'true',
+    rawRequestLogging: env.RAW_REQUEST_LOGGING === 'true',
   };
   if (env.DIRECT_EDITS !== undefined && !['true', 'false'].includes(env.DIRECT_EDITS)) {
     throw new Error('DIRECT_EDITS must be true or false');
+  }
+  if (env.RAW_REQUEST_LOGGING !== undefined && !['true', 'false'].includes(env.RAW_REQUEST_LOGGING)) {
+    throw new Error('RAW_REQUEST_LOGGING must be true or false');
   }
   if (!/^[a-zA-Z0-9._-]+$/.test(config.controlModel)) throw new Error('Invalid CONTROL_MODEL');
   return config;

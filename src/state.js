@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, rm, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
 import { loadConfig } from './config.js';
@@ -11,6 +11,7 @@ const editable = {
   upstreamURL: 'UPSTREAM_BASE_URL',
   maxBodyBytes: 'MAX_BODY_BYTES', maxResponseBytes: 'MAX_RESPONSE_BYTES',
 };
+const requestID = /^[a-f0-9-]{36}$/;
 async function atomic(file, content) {
   const temp = `${file}.${randomBytes(5).toString('hex')}.tmp`;
   await writeFile(temp, content, { mode: 0o600 });
@@ -26,6 +27,7 @@ export class State {
     this.config = config;
     this.directory = directory;
     this.key = key;
+    this.rawDirectory = path.join(directory, 'raw-requests');
   }
   static async open(config, directory) {
     await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -40,6 +42,7 @@ export class State {
     const master = Buffer.from(await localSecret('master.key', 32), 'hex');
     if (master.length !== 32) throw new Error('Invalid local master.key');
     const state = new State(config, directory, master);
+    await mkdir(state.rawDirectory, { recursive: true, mode: 0o700 });
     state.loginKey = process.env.MANAGEMENT_KEY || await localSecret('admin-token.txt', 32);
     if (state.loginKey.length < 24) throw new Error('MANAGEMENT_KEY must contain at least 24 characters');
     try {
@@ -61,6 +64,7 @@ export class State {
         await atomic(path.join(directory, 'requests.json'), JSON.stringify(state.rows));
       }
     } catch (err) { if (err.code !== 'ENOENT') throw new Error('Cannot read request history'); }
+    await state.pruneRawRequests(new Set(state.rows.map(row => row.request_id)));
     config.sub2apiBase ||= new URL(config.upstreamURL).origin;
     config.sub2apiKey ||= '';
     return state;
@@ -86,12 +90,14 @@ export class State {
       }
     }
     if (patch.doneSentinel !== undefined && typeof patch.doneSentinel !== 'boolean') throw new Error('doneSentinel must be boolean');
+    if (patch.rawRequestLogging !== undefined && typeof patch.rawRequestLogging !== 'boolean') throw new Error('rawRequestLogging must be boolean');
     const env = { HOST: this.config.host, PORT: String(this.config.port) };
     for (const [key, name] of Object.entries(editable)) {
       const value = Object.hasOwn(patch, key) ? patch[key] : this.config[key];
       env[name] = key === 'maxConcurrent' && value == null ? '' : String(value);
     }
     env.SSE_DONE_SENTINEL = String(patch.doneSentinel ?? this.config.doneSentinel);
+    env.RAW_REQUEST_LOGGING = String(patch.rawRequestLogging ?? this.config.rawRequestLogging);
     const directEdits = patch.directEdits ?? this.config.directEdits;
     if (typeof directEdits !== 'boolean') throw new Error('directEdits must be boolean');
     env.DIRECT_EDITS = String(directEdits);
@@ -107,7 +113,7 @@ export class State {
   }
   publicSettings() {
     const out = {};
-    for (const name of [...Object.keys(editable), 'doneSentinel', 'directEdits', 'sub2apiBase']) {
+    for (const name of [...Object.keys(editable), 'doneSentinel', 'directEdits', 'rawRequestLogging', 'sub2apiBase']) {
       if (!secretNames.includes(name)) out[name] = this.config[name];
     }
     for (const name of secretNames) out[`${name}Configured`] = Boolean(this.config[name]);
@@ -115,13 +121,13 @@ export class State {
   }
   async saveSettings(patch) {
     for (const name of Object.keys(patch)) {
-      if (![...Object.keys(editable), 'doneSentinel', 'directEdits', 'sub2apiBase', 'sub2apiKey'].includes(name)) throw new Error(`未知设置：${name}`);
+      if (![...Object.keys(editable), 'doneSentinel', 'directEdits', 'rawRequestLogging', 'sub2apiBase', 'sub2apiKey'].includes(name)) throw new Error(`未知设置：${name}`);
     }
     // Serialize concurrent settings updates to prevent memory/disk divergence.
     const operation = this.updated.catch(() => {}).then(async () => {
       const next = this.validate(patch);
       const saved = {};
-      for (const name of [...Object.keys(editable), 'doneSentinel', 'directEdits', 'sub2apiBase', 'sub2apiKey']) {
+      for (const name of [...Object.keys(editable), 'doneSentinel', 'directEdits', 'rawRequestLogging', 'sub2apiBase', 'sub2apiKey']) {
         saved[name] = secretNames.includes(name) && next[name] ? this.encrypt(next[name]) : next[name];
       }
       await atomic(path.join(this.directory, 'settings.json'), JSON.stringify(saved, null, 2));
@@ -146,18 +152,23 @@ export class State {
     const { cancel, ...safe } = current || {};
     this.rows.unshift({ ...safe, ...row, updated_at: Date.now(),
       timeline: [...(safe.timeline || []), { phase: 'finished', at: Date.now() }] });
+    const removed = this.rows.filter(item => item.started_at < Date.now() - logWindowMs).map(item => item.request_id);
     this.rows = this.rows.filter(item => item.started_at >= Date.now() - logWindowMs);
     this.updated = this.updated.catch(() => {}).then(async () => {
       await atomic(path.join(this.directory, 'requests.json'), JSON.stringify(this.rows));
+      await this.removeRawRequests(removed);
       this.persistError = false;
     }).catch(() => { this.persistError = true; });
   }
   prune() {
+    const removed = this.rows.filter(item => item.started_at < Date.now() - logWindowMs).map(item => item.request_id);
     const before = this.rows.length;
     this.rows = this.rows.filter(item => item.started_at >= Date.now() - logWindowMs);
     if (this.rows.length !== before) {
-      this.updated = this.updated.catch(() => {}).then(() =>
-        atomic(path.join(this.directory, 'requests.json'), JSON.stringify(this.rows)))
+      this.updated = this.updated.catch(() => {}).then(async () => {
+        await atomic(path.join(this.directory, 'requests.json'), JSON.stringify(this.rows));
+        await this.removeRawRequests(removed);
+      })
         .then(() => { this.persistError = false; }, () => { this.persistError = true; });
     }
   }
@@ -175,18 +186,42 @@ export class State {
     this.updated = operation.catch(() => { this.persistError = true; });
     await operation;
   }
+  rawPath(id) {
+    if (!requestID.test(id)) throw new Error('Invalid request ID');
+    return path.join(this.rawDirectory, `${id}.json`);
+  }
+  async captureRawRequest(id, request) {
+    try { await atomic(this.rawPath(id), JSON.stringify(request)); }
+    catch (error) { this.persistError = true; throw error; }
+  }
+  async rawRequest(id) {
+    try { return JSON.parse(await readFile(this.rawPath(id), 'utf8')); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  }
+  async removeRawRequests(ids) {
+    await Promise.all(ids.map(id => rm(this.rawPath(id), { force: true })));
+  }
+  async pruneRawRequests(keep = new Set(this.rows.map(row => row.request_id))) {
+    const files = await readdir(this.rawDirectory, { withFileTypes: true });
+    await Promise.all(files.filter(file => file.isFile() && file.name.endsWith('.json'))
+      .map(file => file.name.slice(0, -5)).filter(id => !keep.has(id) || !requestID.test(id))
+      .map(id => rm(path.join(this.rawDirectory, `${id}.json`), { force: true })));
+  }
   async deleteRequest(id) {
     if (this.live.has(id)) return 'active';
     const index = this.rows.findIndex(row => row.request_id === id);
     if (index === -1) return 'missing';
     this.rows.splice(index, 1);
     await this.persistRows();
+    await this.removeRawRequests([id]);
     return 'deleted';
   }
   async clearHistory() {
+    const ids = this.rows.map(row => row.request_id);
     const deleted = this.rows.length;
     this.rows = [];
     await this.persistRows();
+    await this.removeRawRequests(ids);
     return deleted;
   }
   allRows() {

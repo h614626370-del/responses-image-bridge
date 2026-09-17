@@ -90,6 +90,9 @@ export function createManagement(state) {
         json(res, 200, { items: rows.slice((page - 1) * 30, page * 30), total: rows.length, page, pages: Math.max(1, Math.ceil(rows.length / 30)) });
       } else if (p === '/admin/api/requests' && req.method === 'DELETE') {
         json(res, 200, { ok: true, deleted: await state.clearHistory() });
+      } else if (/^\/admin\/api\/requests\/[a-f0-9-]{36}\/raw$/.test(p) && req.method === 'GET') {
+        const raw = await state.rawRequest(p.split('/')[4]);
+        json(res, raw ? 200 : 404, raw || { error: '该记录没有保存原始请求' });
       } else if (/^\/admin\/api\/requests\/[a-f0-9-]+$/.test(p) && req.method === 'DELETE') {
         const result = await state.deleteRequest(p.split('/')[4]);
         json(res, result === 'deleted' ? 200 : result === 'active' ? 409 : 404, {
