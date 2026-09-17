@@ -85,6 +85,35 @@ test('configuration normalizes base URLs and ignores obsolete fixed credentials'
   assert.throws(() => loadConfig({ MAX_CONCURRENT: '0' }), /MAX_CONCURRENT/);
   assert.equal(loadConfig({ UPSTREAM_PROXY: 'http://localhost:7897' }).proxy, undefined);
 });
+
+test('browser clients can preflight model APIs without exposing management APIs', async t => {
+  const f = await fixture(t);
+  const response = await fetch(`${f.bridgeURL}/v1/responses`, {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'http://desktop-client.local',
+      'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'authorization,content-type,x-client-version',
+    },
+  });
+  assert.equal(response.status, 204);
+  assert.equal(response.headers.get('access-control-allow-origin'), '*');
+  assert.equal(response.headers.get('access-control-allow-methods'), 'GET, POST, OPTIONS');
+  assert.equal(response.headers.get('access-control-allow-headers'),
+    'authorization,content-type,x-client-version');
+  assert.match(response.headers.get('access-control-expose-headers'), /X-Bridge-Request-Id/i);
+  assert.equal(f.captured.length, 0);
+
+  const post = await f.post(requestBody, { headers: { Origin: 'http://desktop-client.local' } });
+  assert.equal(post.headers.get('access-control-allow-origin'), '*');
+  await post.text();
+
+  const management = await fetch(`${f.bridgeURL}/admin/api/status`, {
+    method: 'OPTIONS',
+    headers: { Origin: 'http://desktop-client.local' },
+  });
+  assert.equal(management.headers.get('access-control-allow-origin'), null);
+});
 test('rewrites only driver and transport; emits early heartbeats and consistent image events', async t => {
   let finish;
   const gate = new Promise(resolve => { finish = resolve; });

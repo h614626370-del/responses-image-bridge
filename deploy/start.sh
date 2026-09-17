@@ -17,11 +17,13 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-if ! grep -qx 'HOST=0.0.0.0' .env || ! grep -qx 'PORT=8787' .env ||
-   ! grep -qx 'COOKIE_SECURE=true' .env; then
-  echo 'Set HOST=0.0.0.0, PORT=8787 and COOKIE_SECURE=true in .env.' >&2
+if ! grep -qx 'HOST=0.0.0.0' .env || ! grep -qx 'PORT=8787' .env; then
+  echo 'Set HOST=0.0.0.0 and PORT=8787 in .env.' >&2
   echo 'The Compose port is bound only to the host loopback; serve it through HTTPS.' >&2
   exit 1
+fi
+if ! grep -qx 'COOKIE_SECURE=true' .env; then
+  echo 'WARNING: COOKIE_SECURE is not true. Use this only while the public endpoint is HTTP.' >&2
 fi
 
 docker compose config --quiet

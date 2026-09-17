@@ -42,6 +42,9 @@ docker compose exec bridge cat /app/data/admin-token.txt
 检查配置并重载 Nginx。公网验证 `https://你的域名/healthz`，
 然后访问 `https://你的域名/admin/`。最好仅允许可信来源访问 `/admin/`。
 
+如果调试阶段只能使用 HTTP，可暂时设置 `COOKIE_SECURE=false`，否则浏览器不会在
+HTTP 请求中发送管理会话 Cookie。启用 HTTPS 后必须改回 `true` 并重启容器。
+
 客户端 Base URL 填 `https://你的域名`，勾选 Responses，填写客户自己的生图 Key。
 先做一张图生图验证，再逐步加并发。客户端仍发 `gpt-5.5` 和流式请求；
 带 Base64 原图且符合直连格式时，中间服务转为 `gpt-image-2` 的

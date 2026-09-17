@@ -11,6 +11,16 @@ function sendJSON(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
+const publicAPIPaths = new Set(['/v1/responses', '/responses', '/v1/models', '/models']);
+function enableAPICORS(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers',
+    req.headers['access-control-request-headers'] || 'Authorization, Content-Type');
+  res.setHeader('Access-Control-Expose-Headers', 'X-Bridge-Request-Id, Content-Type');
+  res.setHeader('Access-Control-Max-Age', '86400');
+}
+
 export async function readJSON(req, maxBytes) {
   let length = 0;
   const chunks = [];
@@ -89,6 +99,15 @@ export function createBridge(baseConfig, { upstream = callUpstream, editUpstream
   const controllers = new Set();
   const server = http.createServer(async (req, res) => {
     if (management && await management(req, res)) return;
+    const requestPath = new URL(req.url, 'http://bridge.local').pathname;
+    if (publicAPIPaths.has(requestPath)) {
+      enableAPICORS(req, res);
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, { 'Cache-Control': 'public, max-age=86400' });
+        res.end();
+        return;
+      }
+    }
     const config = { ...baseConfig };
     const bridgeID = randomUUID();
     const begin = Date.now();
@@ -127,7 +146,7 @@ export function createBridge(baseConfig, { upstream = callUpstream, editUpstream
       return value;
     }
     try {
-      const path = new URL(req.url, 'http://bridge.local').pathname;
+      const path = requestPath;
       isResponses = req.method === 'POST' && ['/v1/responses', '/responses'].includes(path);
       if (req.method === 'GET' && path === '/healthz') {
         outcome = 'health';
