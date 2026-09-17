@@ -10,26 +10,13 @@
   Docker Compose 插件；服务器和用户需具备运行 Docker 的权限。
 - 一个解析到服务器的域名、可用的 HTTPS 证书，以及 Nginx（或同等反向代理）。
   对外开放 443；证书签发如需 HTTP 验证，还需 80。不要对外开放 8787。
-- 私有 GitHub 仓库的只读访问权限。不要把客户端 Key、管理员 Key、原图、
-  `.env` 或 `data/` 上传到 GitHub。
+- 仓库公开可读，不需要为服务器配置 GitHub 凭据。不要把客户端 Key、管理员 Key、
+  原图、`.env` 或 `data/` 上传到 GitHub。
 
 ## 从 GitHub 拉取
 
-推荐给这一个私有仓库配置单独的只读 Deploy Key：
-
 ```sh
-mkdir -p ~/.ssh && chmod 700 ~/.ssh
-ssh-keygen -t ed25519 -f ~/.ssh/responses-image-bridge -N '' -C 'responses-image-bridge-deploy'
-cat ~/.ssh/responses-image-bridge.pub
-```
-
-把最后一行输出的**公钥**添加到仓库 `Settings > Deploy keys`，不要勾选写入权限；
-私钥只留在服务器，设置权限为 `600`。首次连接 GitHub 时核对 SSH 主机指纹。
-
-```sh
-chmod 600 ~/.ssh/responses-image-bridge
-GIT_SSH_COMMAND="ssh -i $HOME/.ssh/responses-image-bridge -o IdentitiesOnly=yes" \
-  git clone git@github.com:h614626370-del/responses-image-bridge.git
+git clone https://github.com/h614626370-del/responses-image-bridge.git
 cd responses-image-bridge
 ```
 
@@ -67,7 +54,7 @@ docker compose exec bridge cat /app/data/admin-token.txt
 
 ```sh
 cd responses-image-bridge
-GIT_SSH_COMMAND="ssh -i $HOME/.ssh/responses-image-bridge -o IdentitiesOnly=yes" git pull --ff-only
+git pull --ff-only
 sh deploy/start.sh
 ```
 

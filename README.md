@@ -198,7 +198,7 @@ npm run smoke -- --live
 
 ## Linux / Docker 部署
 
-从私有 GitHub 仓库拉取、首次启动、HTTPS 入口、更新及备份的完整操作见
+从 GitHub 仓库拉取、首次启动、HTTPS 入口、更新及备份的完整操作见
 [`deploy/DEPLOY.md`](deploy/DEPLOY.md)。服务器执行 `sh deploy/start.sh`：
 首次创建 `.env` 后检查配置，再次执行即可构建并等待容器健康。
 
