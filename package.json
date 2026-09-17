@@ -1,0 +1,13 @@
+{
+  "name": "responses-image-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "SSE-facing image bridge with synchronous Responses upstream",
+  "engines": { "node": ">=22.15.0" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/main.js",
+    "test": "node --test",
+    "smoke": "node --env-file-if-exists=.env scripts/smoke.js"
+  }
+}

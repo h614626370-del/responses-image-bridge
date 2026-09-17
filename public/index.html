@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>生图中转 · 管理控制台</title>
+  <link rel="icon" href="/admin/icon.svg">
+  <link rel="stylesheet" href="/admin/style.css">
+  <script type="module" src="/admin/app.js"></script>
+</head>
+<body>
+  <main id="login" class="login-shell">
+    <form id="login-form" class="login-form">
+      <img src="/admin/icon.svg" width="40" height="40" alt="">
+      <h1>生图中转</h1>
+      <p class="muted">管理员登录</p>
+      <label for="login-key">管理口令</label>
+      <input id="login-key" name="key" type="password" autocomplete="current-password" required>
+      <button class="primary" type="submit">登录控制台</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+  </main>
+  <div id="app" class="shell" hidden>
+    <aside>
+      <a class="brand" href="/admin/"><img src="/admin/icon.svg" width="30" height="30" alt=""><strong>生图中转</strong></a>
+      <nav aria-label="主导航">
+        <button data-view="monitor" class="nav active">请求监控</button>
+        <button data-view="settings" class="nav">转发设置</button>
+        <button data-view="accounts" class="nav">账号诊断</button>
+      </nav>
+      <div class="sidebar-footer"><span class="version">Responses Bridge · 0.1</span><button id="logout">退出登录</button></div>
+    </aside>
+    <main class="workspace">
+      <header><div><span class="eyebrow">管理控制台</span><h1 id="page-title">请求监控</h1></div><div class="header-state"><span id="service-state" class="badge">连接中</span><span id="refresh-time" class="muted"></span></div></header>
+      <p id="notice" class="notice" role="status" hidden></p>
+      <section id="view-monitor" class="view">
+        <div class="metrics">
+          <div><span>执行中 / 排队</span><strong id="metric-active">—</strong></div>
+          <div><span>12 小时请求</span><strong id="metric-total">—</strong></div>
+          <div><span>成功率</span><strong id="metric-rate">—</strong></div>
+          <div><span>成功请求中位耗时</span><strong id="metric-latency">—</strong></div>
+        </div>
+        <div class="section-heading"><h2>最近 12 小时请求日志</h2><div class="actions"><button id="pause">暂停接入</button><button id="export">导出记录</button><button id="refresh">刷新</button></div></div>
+        <div class="filters"><label>状态<select id="status-filter"><option value="">全部</option><option value="running">执行中</option><option value="queued">排队中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="incomplete">未完成</option><option value="canceled">已取消</option><option value="client_disconnected">客户端断开</option></select></label><label>路径<select id="route-filter"><option value="">全部</option><option value="images-edits">图生图直连</option><option value="responses">Responses</option></select></label><label class="grow">查找请求<input id="request-search" type="search" placeholder="请求 ID / 错误码"></label><label class="inline"><input type="checkbox" id="auto-refresh" checked>自动刷新</label></div>
+        <div class="table-wrap"><table><thead><tr><th>请求 / 时间</th><th>路径 / 模型</th><th>状态</th><th>耗时 / 排队</th><th>图片</th><th>操作</th></tr></thead><tbody id="requests-body"></tbody></table></div>
+        <div class="pagination"><span id="request-count" class="muted"></span><div class="actions"><button id="previous">上一页</button><span id="page-number"></span><button id="next">下一页</button></div></div>
+      </section>
+      <section id="view-settings" class="view" hidden>
+        <form id="settings-form">
+          <div class="section-heading"><h2>转发与连接</h2><button type="submit" class="primary">保存设置</button></div>
+          <div class="form-grid">
+            <label>Responses 主控模型<input name="controlModel" required></label>
+            <label>上游 Responses 地址<input name="upstreamURL" type="url" required></label>
+            <label>本地并发上限（可选）<input name="maxConcurrent" type="number" min="1" max="100" placeholder="留空由 sub2api 控制"></label>
+            <label>最大排队数<input name="maxQueue" type="number" min="0" max="1000" required></label>
+            <label>总超时（秒）<input name="timeoutSeconds" type="number" min="1" max="3600" required></label>
+            <label>心跳间隔（秒）<input name="heartbeatSeconds" type="number" min="0.1" step="0.1" max="60" required></label>
+            <label class="inline"><input name="doneSentinel" type="checkbox">附加 [DONE] 结束标记</label>
+            <label class="inline"><input name="directEdits" type="checkbox">图生图请求直连图片编辑接口</label>
+          </div>
+          <div class="section-heading rule"><h2>sub2api 管理连接</h2><span class="badge">只读</span></div>
+          <div class="form-grid">
+            <label>sub2api 管理站地址<input name="sub2apiBase" type="url" required></label>
+            <label>管理员 Key <span id="admin-key-status" class="muted"></span><input name="sub2apiKey" type="password" autocomplete="new-password" placeholder="留空保留现有值"><span class="inline"><input name="clearSub2apiKey" type="checkbox">清除管理员 Key</span></label>
+          </div>
+          <div class="form-footer"><span id="save-state" role="status"></span><button type="submit" class="primary">保存设置</button></div>
+        </form>
+      </section>
+      <section id="view-accounts" class="view" hidden>
+        <div class="section-heading"><h2>OpenAI 账号</h2><div class="actions"><span class="badge">只读查询</span><button id="load-accounts">查询账号</button></div></div>
+        <div class="filters"><label>分组<select id="group-filter"><option value="">全部分组</option></select></label><label class="grow">账号名称<input id="account-search" type="search" placeholder="搜索账号"></label><button id="load-groups">读取分组</button></div>
+        <p id="account-state" class="empty" role="status">尚未查询</p>
+        <div class="table-wrap"><table><thead><tr><th>ID / 名称</th><th>类型</th><th>状态</th><th>调度</th><th>并发</th><th>优先级</th><th>限流恢复</th></tr></thead><tbody id="accounts-body"></tbody></table></div>
+        <div class="pagination"><span id="account-count" class="muted"></span><div class="actions"><button id="accounts-previous">上一页</button><span id="account-page"></span><button id="accounts-next">下一页</button></div></div>
+      </section>
+    </main>
+  </div>
+  <dialog id="detail"><div class="section-heading"><h2>请求详情</h2><button id="close-detail" aria-label="关闭详情">关闭</button></div><dl id="detail-fields"></dl><div class="actions"><button id="lookup-usage">查询上游用量</button></div><pre id="usage-result" hidden></pre></dialog>
+</body>
+</html>
