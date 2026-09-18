@@ -4,10 +4,15 @@
   "private": true,
   "type": "module",
   "description": "SSE-facing image bridge with synchronous Responses upstream",
-  "engines": { "node": ">=22.15.0" },
+  "engines": {
+    "node": ">=22.15.0"
+  },
   "scripts": {
     "start": "node --env-file-if-exists=.env src/main.js",
     "test": "node --test",
     "smoke": "node --env-file-if-exists=.env scripts/smoke.js"
+  },
+  "dependencies": {
+    "sharp": "0.35.4"
   }
 }

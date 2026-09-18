@@ -269,7 +269,8 @@ export function createBridge(baseConfig, { upstream = callUpstream, editUpstream
       const reason = signal.aborted ? signal.reason : err;
       errorCode = reason instanceof BridgeError ? reason.code : 'upstream_connection_error';
       if (reason instanceof BridgeError && ['direct_edit_unsupported', 'image_download_failed',
-        'image_download_timeout', 'image_url_blocked', 'image_too_large', 'image_missing', 'upstream_http_error',
+        'image_download_timeout', 'image_url_blocked', 'image_too_large', 'image_conversion_failed',
+        'image_missing', 'upstream_http_error',
         'bridge_timeout', 'request_too_large'].includes(reason.code)) {
         errorDetail = reason.message.slice(0, 240);
       }

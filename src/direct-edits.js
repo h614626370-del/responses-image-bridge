@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import https from 'node:https';
 import { BlockList } from 'node:net';
+import sharp from 'sharp';
 import { BridgeError } from './upstream.js';
 
 const maxImageBytes = 20 * 1024 * 1024;
+const maxImagePixels = 40_000_000;
 const maxRedirects = 3;
 const downloadTimeoutMs = 30000;
 const allowedOptions = ['size', 'quality', 'background', 'output_format', 'output_compression',
@@ -188,7 +190,20 @@ export function parseDirectEdit(body) {
 
 export async function materializeDirectEdit(spec, signal, loader = downloadRemoteImage) {
   async function materialize(image) {
-    return image?.url ? loader(image.url, signal) : image;
+    if (!image?.url) return image;
+    const downloaded = await loader(image.url, signal);
+    try {
+      const bytes = await sharp(downloaded.bytes, { limitInputPixels: maxImagePixels })
+        .webp({ lossless: true })
+        .toBuffer();
+      if (!bytes.length || bytes.length > maxImageBytes) {
+        throw new BridgeError(413, 'image_too_large', 'Converted source image exceeds 20 MiB');
+      }
+      return { bytes, mime: 'image/webp' };
+    } catch (error) {
+      if (error instanceof BridgeError) throw error;
+      throw new BridgeError(400, 'image_conversion_failed', 'Could not convert the remote source image');
+    }
   }
   return {
     ...spec,

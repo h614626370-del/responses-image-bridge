@@ -6,12 +6,14 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import sharp from 'sharp';
 import { loadConfig } from '../src/config.js';
 import { State, logWindowMs } from '../src/state.js';
 import { createBridge } from '../src/server.js';
-import { downloadRemoteImage } from '../src/direct-edits.js';
+import { downloadRemoteImage, materializeDirectEdit } from '../src/direct-edits.js';
 
-const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
+const image = (await sharp({ create: { width: 1, height: 1, channels: 4,
+  background: { r: 255, g: 255, b: 255, alpha: 1 } } }).png().toBuffer()).toString('base64');
 const dataURL = `data:image/png;base64,${image}`;
 const editBody = {
   model: 'gpt-5.5', stream: true, instructions: 'Keep the foreground.',
@@ -169,7 +171,13 @@ test('HTTPS image URLs are downloaded, validated and uploaded as multipart files
     const form = await new Request('http://local.test', { method: 'POST', headers: {
       'Content-Type': req.headers['content-type'],
     }, body: raw }).formData();
-    assert.deepEqual(Buffer.from(await form.get('image').arrayBuffer()), Buffer.from(image, 'base64'));
+    const uploaded = form.get('image');
+    const uploadedBytes = Buffer.from(await uploaded.arrayBuffer());
+    assert.equal(uploaded.type, 'image/webp');
+    assert.equal(uploadedBytes.subarray(0, 4).toString(), 'RIFF');
+    assert.equal(uploadedBytes.subarray(8, 12).toString(), 'WEBP');
+    const metadata = await sharp(uploadedBytes).metadata();
+    assert.deepEqual({ width: metadata.width, height: metadata.height }, { width: 1, height: 1 });
     res.end(JSON.stringify({ data: [{ b64_json: image }] }));
   }, {}, { imageLoader: async (url, signal) => {
     loaded.push({ url, signal });
@@ -184,6 +192,18 @@ test('HTTPS image URLs are downloaded, validated and uploaded as multipart files
   assert.equal(loaded[0].signal.aborted, false);
   assert.deepEqual(f.state.allRows()[0].timeline.map(step => step.phase),
     ['queued', 'source_download', 'upstream', 'upstream_headers', 'delivery', 'finished']);
+});
+
+test('remote JPEG images are converted to lossless WebP before upload', async () => {
+  const jpeg = await sharp(Buffer.from(image, 'base64')).jpeg({ quality: 70 }).toBuffer();
+  const spec = { images: [{ url: 'https://cdn.example.com/product.jpg' }], mask: undefined,
+    options: {}, model: 'gpt-image-2', prompt: 'test', remoteCount: 1 };
+  const converted = await materializeDirectEdit(spec, undefined, async () => ({
+    bytes: jpeg, mime: 'image/jpeg',
+  }));
+  assert.equal(converted.images[0].mime, 'image/webp');
+  assert.equal(converted.images[0].bytes.subarray(0, 4).toString(), 'RIFF');
+  assert.equal(converted.images[0].bytes.subarray(8, 12).toString(), 'WEBP');
 });
 
 test('remote image downloader rejects loopback and private destinations', async () => {
